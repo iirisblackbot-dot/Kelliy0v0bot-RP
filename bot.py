@@ -1,7 +1,7 @@
 """
 Telegram РП-бот с аниме-гифками (nekos.best API)
 Автор: Manus AI
-Версия: 3.0 (Профили, Свадьбы, Группы, Исправленный Инлайн)
+Версия: 3.1 (Исправленный Инлайн и Авто-подстановка ника)
 """
 
 import logging
@@ -51,7 +51,6 @@ logger = logging.getLogger(__name__)
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Таблица профилей
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS profiles (
             user_id INTEGER PRIMARY KEY,
@@ -64,7 +63,6 @@ def init_db():
             marriage_date TEXT
         )
     ''')
-    # Таблица свадебных предложений
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS marriage_proposals (
             proposer_id INTEGER,
@@ -119,7 +117,6 @@ def set_marriage(user1_id, user2_id):
     date = datetime.now().strftime("%Y-%m-%d")
     cursor.execute("UPDATE profiles SET partner_id = ?, marriage_date = ? WHERE user_id = ?", (user2_id, date, user1_id))
     cursor.execute("UPDATE profiles SET partner_id = ?, marriage_date = ? WHERE user_id = ?", (user1_id, date, user2_id))
-    cursor.execute("DELETE FROM marriage_proposals WHERE proposer_id = ? OR target_id = ? OR proposer_id = ? OR target_id = ?", (user1_id, user1_id, user2_id, user2_id))
     conn.commit()
     conn.close()
 
@@ -466,8 +463,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         
         await query.answer()
-        initiator = get_profile(initiator_id)
-        initiator_mention = get_user_mention(query.from_user if initiator_id == user.id else (await context.bot.get_chat(initiator_id)))
+        
+        # Получаем упоминания из текущего текста
+        current_text = query.message.caption if query.message.caption else query.message.text
+        mentions = re.findall(r"(@\w+|\[.*?\]\(tg://user\?id=\d+\))", current_text)
+        
+        initiator_mention = mentions[0] if len(mentions) > 0 else f"ID:{initiator_id}"
         target_mention = get_user_mention(user)
         
         _, _, _, accepted_tpl, declined_tpl = BUILTIN_COMMANDS[cmd_name]
@@ -478,9 +479,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             add_xp(user.id, 5)
             
         if query.message.caption:
-            await query.edit_message_caption(caption=new_text, parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_caption(caption=new_text, parse_mode=ParseMode.MARKDOWN, reply_markup=None)
         else:
-            await query.edit_message_text(text=new_text, parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(text=new_text, parse_mode=ParseMode.MARKDOWN, reply_markup=None)
         return
 
     # Свадебные кнопки (m_acc_ / m_dec_)
@@ -586,33 +587,43 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     target_input = parts[1] if len(parts) > 1 else None
     
     mapped_cmd = RUSSIAN_ALIASES.get(cmd_query, cmd_query)
-    commands_to_show = [c for c in BUILTIN_COMMANDS if c.startswith(mapped_cmd)][:20] if mapped_cmd else list(BUILTIN_COMMANDS.keys())[:20]
+    
+    # Если введено только название команды, предлагаем варианты с авто-подстановкой цели
+    commands_to_show = [c for c in BUILTIN_COMMANDS if c.startswith(mapped_cmd)][:15] if mapped_cmd else list(BUILTIN_COMMANDS.keys())[:15]
     
     for cmd_name in commands_to_show:
         endpoint, text_with, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
-        target_id = 0
+        gif_url = await fetch_gif(endpoint)
+        if not gif_url: continue
+        
+        # 1. Вариант БЕЗ цели (для всех)
+        results.append(InlineQueryResultGif(
+            id=f"{cmd_name}_all_{uuid.uuid4()}",
+            gif_url=gif_url,
+            thumbnail_url=gif_url,
+            title=f"/{cmd_name} (для всех)",
+            caption=text_without.format(user=user_mention),
+            reply_markup=get_rp_action_keyboard(user.id, 0, cmd_name),
+            parse_mode=ParseMode.MARKDOWN
+        ))
+        
+        # 2. Вариант С целью (если введена)
         if target_input:
-            caption = text_with.format(user=user_mention, target=target_input)
-            # Пытаемся вытащить ID из упоминания типа [name](tg://user?id=123)
+            target_id = 0
             match = re.search(r"tg://user\?id=(\d+)", target_input)
             if match: target_id = int(match.group(1))
-        else:
-            caption = text_without.format(user=user_mention)
-        
-        gif_url = await fetch_gif(endpoint)
-        if gif_url:
-            # Кнопки Принять/Отклонить теперь всегда добавляются в инлайне
-            reply_markup = get_rp_action_keyboard(user.id, target_id, cmd_name)
+            
             results.append(InlineQueryResultGif(
-                id=str(uuid.uuid4()),
+                id=f"{cmd_name}_target_{uuid.uuid4()}",
                 gif_url=gif_url,
                 thumbnail_url=gif_url,
-                title=f"/{cmd_name}",
-                caption=caption,
-                reply_markup=reply_markup,
+                title=f"/{cmd_name} для {target_input}",
+                caption=text_with.format(user=user_mention, target=target_input),
+                reply_markup=get_rp_action_keyboard(user.id, target_id, cmd_name),
                 parse_mode=ParseMode.MARKDOWN
             ))
-    await query.answer(results, cache_time=5)
+            
+    await query.answer(results, cache_time=5, is_personal=True)
 
 # ─── Запуск ──────────────────────────────────────────────────────────────────
 
@@ -627,14 +638,13 @@ def main() -> None:
     app.add_handler(CommandHandler("addcmd", cmd_add_custom))
     app.add_handler(CallbackQueryHandler(handle_callback))
     
-    # Регистрация всех РП команд
     for cmd in BUILTIN_COMMANDS:
         app.add_handler(CommandHandler(cmd, handle_rp_command))
     
     app.add_handler(MessageHandler(filters.COMMAND, handle_rp_command))
     app.add_handler(InlineQueryHandler(inline_query))
     
-    logger.info("Бот v3.0 запущен!")
+    logger.info("Бот v3.1 запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
