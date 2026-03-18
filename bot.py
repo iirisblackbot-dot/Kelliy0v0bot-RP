@@ -1,7 +1,7 @@
 """
 Telegram РП-бот с аниме-гифками (nekos.best API)
 Автор: Manus AI
-Версия: 3.4 (100+ РП-команд)
+Версия: 3.5 (Новые интимные и активные команды)
 """
 
 import logging
@@ -211,29 +211,15 @@ BUILTIN_COMMANDS: dict[str, tuple[str, str, str, str, str]] = {
     "snuggle":   ("snuggle",   "🧸 {user} уютно прижимается к {target}!",   "🧸 {user} ищет уюта!", "🧸 {target} и {user} мило обнимаются!", "💔 {target} отодвинулся от {user}."),
     "shout":     ("shout",     "📢 {user} кричит на {target}!",            "📢 {user} кричит!", "📢 {target} кричит в ответ на {user}!", "😑 {target} заткнул уши."),
     "scared":    ("scared",    "😨 {user} боится {target}!",               "😨 {user} дрожит от страха!", "🫂 {target} успокаивает {user}!", "😈 {target} пугает {user} еще сильнее!"),
-    "punch":     ("punch",     "👊 {user} хочет ударить {target}!",         "👊 {user} бьёт кулаком!", "👊 {user} ударил {target}!", "🛡️ {target} увернулся от удара!"),
-    "kick":      ("kick",      "🦵 {user} хочет пнуть {target}!",           "🦵 {user} пинает воздух!", "🦵 {user} пнул {target}!", "🛡️ {target} заблокировал пинок!"),
     "lick":      ("lick",      "👅 {user} хочет лизнуть {target}!",         "👅 {user} облизывается!", "👅 {user} лизнул {target}!", "🤢 {target} оттолкнул {user}!"),
     "glare":     ("glare",     "😠 {user} сердито смотрит на {target}!",    "😠 {user} сердито смотрит!", "😠 {target} смотрит в ответ!", "😑 {target} отвел взгляд."),
-    "pout":      ("pout",      "😤 {user} дуется на {target}!",            "😤 {user} дуется!", "🫂 {target} пытается развеселить {user}!", "😏 {target} дразнит {user} еще больше."),
-    "think":     ("think",     "🤔 {user} думает о {target}!",             "🤔 {user} думает!", "🤔 {target} тоже задумался!", "😑 {target} прервал мысли {user}."),
-    "happy":     ("happy",     "😄 {user} счастлив рядом с {target}!",    "😄 {user} счастлив!", "😄 {target} тоже рад видеть {user}!", "😑 {target} испортил настроение {user}."),
-    "angry":     ("angry",     "😠 {user} злится на {target}!",            "😠 {user} злится!", "😠 {target} злится в ответ!", "🫂 {target} пытается успокоить {user}."),
-    "shoot":     ("shoot",     "🔫 {user} целится в {target}!",            "🔫 {user} стреляет!", "🔫 {user} попал в {target}!", "🛡️ {target} увернулся от выстрела!"),
-    "lurk":      ("lurk",      "🕵️ {user} следит за {target}!",            "🕵️ {user} наблюдает!", "😱 {target} заметил слежку {user}!", "😏 {user} остался незамеченным."),
-    "confused":  ("confused",  "😕 {user} не понимает {target}!",          "😕 {user} в замешательстве!", "😕 {target} тоже ничего не понимает!", "💡 {target} все объяснил {user}."),
-    "shrug":     ("shrug",     "🤷 {user} пожимает плечами при {target}!", "🤷 {user} пожимает плечами!", "🤷 {target} тоже не знает, что сказать.", "💡 {target} нашел решение!"),
-    "wag":       ("wag",       "🐾 {user} виляет хвостом перед {target}!", "🐾 {user} виляет хвостом!", "😊 {target} погладил {user}!", "😑 {target} проигнорировал {user}."),
-    "sip":       ("sip",       "☕ {user} пьёт чай с {target}!",           "☕ {user} пьёт чай!", "☕ {target} и {user} мило беседуют за чаем.", "🚫 {target} отказался от чая."),
-    "teehee":    ("teehee",    "🤭 {user} хихикает над {target}!",         "🤭 {user} хихикает!", "🤭 {target} хихикает вместе с {user}!", "😠 {target} не видит ничего смешного."),
-    "shocked":   ("shocked",   "😱 {user} в шоке от {target}!",            "😱 {user} шокирован!", "😱 {target} тоже в шоке!", "😏 {target} ожидал такой реакции."),
-    "bleh":      ("bleh",      "😛 {user} показывает язык {target}!",      "😛 {user} показывает язык!", "😛 {target} показал язык в ответ!", "😑 {target} считает {user} ребенком."),
-    "bored":     ("bored",     "😑 {user} скучает с {target}!",            "😑 {user} скучает!", "💡 {target} придумал развлечение!", "💤 {user} и {target} оба уснули от скуки."),
-    "nya":       ("nya",       "🐱 {user} мяукает на {target}!",           "🐱 {user} мяукает!", "🐱 {target} мяукнул в ответ!", "😑 {target} не любит кошек."),
-    "tableflip": ("tableflip", "😤 {user} переворачивает стол из-за {target}!", "😤 {user} переворачивает стол!", "😤 {target} перевернул еще один стол!", "🛡️ {target} поймал стол!"),
+    "sex":       ("kiss",      "🔞 {user} хочет заняться сексом с {target}!", "🔞 {user} ищет партнера!", "🔞 {user} и {target} занялись бурным сексом! 🔥", "🚫 {target} отказал {user} в близости."),
+    "blowjob":   ("lick",      "🔞 {user} хочет сделать минет {target}!",   "🔞 {user} облизывается!", "🔞 {user} сделал минет {target}! 💦", "🚫 {target} оттолкнул {user}."),
+    "strip":     ("blush",     "🔞 {user} хочет раздеть {target}!",         "🔞 {user} раздевается!", "🔞 {user} раздел {target}! 😳", "🚫 {target} не дал себя раздеть!"),
+    "spank":     ("slap",      "🍑 {user} хочет отшлепать {target}!",       "🍑 {user} шлепает воздух!", "🍑 {user} отшлепал {target}!", "🛡️ {target} увернулся от шлепка!"),
+    "crunch":    ("poke",      "🦴 {user} хочет хрустнуть {target}!",       "🦴 {user} хрустит костями!", "🦴 {user} хрустнул {target}!", "🛡️ {target} увернулся!"),
 }
 
-# Добавляем еще 50+ алиасов и команд для полноты
 RUSSIAN_ALIASES: dict[str, str] = {
     "обнять": "hug", "обнимашки": "hug", "обнял": "hug",
     "поцеловать": "kiss", "чмок": "kiss", "поцелуй": "kiss",
@@ -298,6 +284,11 @@ RUSSIAN_ALIASES: dict[str, str] = {
     "бояться": "scared", "испуг": "scared",
     "лизнуть": "lick", "лизать": "lick",
     "злой_взгляд": "glare", "сердиться": "glare",
+    "трахнуть": "sex", "секс": "sex",
+    "отсосать": "blowjob", "минет": "blowjob",
+    "раздеть": "strip",
+    "отшлепать": "spank", "шлепок": "spank",
+    "хрусть": "crunch",
 }
 
 # ─── Утилиты ─────────────────────────────────────────────────────────────────
@@ -328,7 +319,6 @@ async def fetch_gif(endpoint: str) -> str | None:
 def get_user_name(user) -> str:
     """Возвращает Имя (Full Name) пользователя в виде ссылки."""
     full_name = user.full_name or user.first_name or "Аноним"
-    # Экранируем спецсимволы Markdown
     full_name = full_name.replace("[", "\[").replace("]", "\]").replace("*", "\*").replace("_", "\_")
     return f"[{full_name}](tg://user?id={user.id})"
 
@@ -708,7 +698,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.COMMAND, handle_rp_command))
     app.add_handler(InlineQueryHandler(inline_query))
     
-    logger.info("Бот v3.4 запущен!")
+    logger.info("Бот v3.5 запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
