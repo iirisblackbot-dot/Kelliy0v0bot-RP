@@ -1,6 +1,7 @@
 """
 Telegram РП-бот с аниме-гифками (nekos.best API)
 Автор: Manus AI
+Версия: 3.0 (Профили, Свадьбы, Группы, Исправленный Инлайн)
 """
 
 import logging
@@ -10,6 +11,8 @@ import uuid
 import asyncio
 import aiohttp
 import re
+import sqlite3
+from datetime import datetime
 
 from telegram import (
     Update,
@@ -33,6 +36,7 @@ from telegram.constants import ParseMode
 # ─── Конфигурация ────────────────────────────────────────────────────────────
 
 BOT_TOKEN = "8730392854:AAFPgevHMNIKg-9K0Ow54OAQfvPY3ehoLAU" # @Kelliy0v0bot
+DB_FILE = "bot_data.db"
 CUSTOM_COMMANDS_FILE = "custom_commands.json"
 NEKOS_API = "https://nekos.best/api/v2/"
 
@@ -42,12 +46,101 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── База данных ─────────────────────────────────────────────────────────────
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Таблица профилей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS profiles (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            rp_count INTEGER DEFAULT 0,
+            partner_id INTEGER DEFAULT 0,
+            marriage_date TEXT
+        )
+    ''')
+    # Таблица свадебных предложений
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS marriage_proposals (
+            proposer_id INTEGER,
+            target_id INTEGER,
+            chat_id INTEGER,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (proposer_id, target_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_profile(user_id, username=None, full_name=None):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM profiles WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        cursor.execute("INSERT INTO profiles (user_id, username, full_name) VALUES (?, ?, ?)", (user_id, username, full_name))
+        conn.commit()
+        cursor.execute("SELECT * FROM profiles WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+    elif username or full_name:
+        cursor.execute("UPDATE profiles SET username = ?, full_name = ? WHERE user_id = ?", (username, full_name, user_id))
+        conn.commit()
+    conn.close()
+    return {
+        "user_id": row[0], "username": row[1], "full_name": row[2],
+        "xp": row[3], "level": row[4], "rp_count": row[5],
+        "partner_id": row[6], "marriage_date": row[7]
+    }
+
+def add_xp(user_id, amount=10):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE profiles SET xp = xp + ?, rp_count = rp_count + 1 WHERE user_id = ?", (amount, user_id))
+    cursor.execute("SELECT xp, level FROM profiles WHERE user_id = ?", (user_id,))
+    xp, level = cursor.fetchone()
+    new_level = int(xp ** 0.5 / 5) + 1
+    if new_level > level:
+        cursor.execute("UPDATE profiles SET level = ? WHERE user_id = ?", (new_level, user_id))
+        conn.commit()
+        conn.close()
+        return True, new_level
+    conn.commit()
+    conn.close()
+    return False, level
+
+def set_marriage(user1_id, user2_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    date = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("UPDATE profiles SET partner_id = ?, marriage_date = ? WHERE user_id = ?", (user2_id, date, user1_id))
+    cursor.execute("UPDATE profiles SET partner_id = ?, marriage_date = ? WHERE user_id = ?", (user1_id, date, user2_id))
+    cursor.execute("DELETE FROM marriage_proposals WHERE proposer_id = ? OR target_id = ? OR proposer_id = ? OR target_id = ?", (user1_id, user1_id, user2_id, user2_id))
+    conn.commit()
+    conn.close()
+
+def divorce(user_id):
+    profile = get_profile(user_id)
+    partner_id = profile["partner_id"]
+    if partner_id == 0: return False
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE profiles SET partner_id = 0, marriage_date = NULL WHERE user_id = ?", (user_id,))
+    cursor.execute("UPDATE profiles SET partner_id = 0, marriage_date = NULL WHERE user_id = ?", (partner_id,))
+    conn.commit()
+    conn.close()
+    return True
+
 # ─── Встроенные РП-команды ───────────────────────────────────────────────────
 
 BUILTIN_COMMANDS: dict[str, tuple[str, str, str, str, str]] = {
     "hug":       ("hug",       "💞 {user} хочет обнять {target}!",          "💞 {user} обнимает всех вокруг!", "💞 {target} принял обнимашки от {user}!", "💔 {target} не хочет обниматься с {user}..."),
     "kiss":      ("kiss",      "💋 {user} хочет поцеловать {target}!",       "💋 {user} посылает воздушный поцелуй!", "💋 {target} ответил на поцелуй {user}!", "💔 {target} увернулся от поцелуя {user}..."),
-    "slap":      ("slap",      "👋 {user} хочет дать пощёчину {target}!",    "👋 {user} бьёт по воздуху!", "👋 {user} дал пощёчину {target}!", "🛡️ {target} заблокировал удар {user}!"),
+    "slap":      ("slap",      "👋 {user} хочет дать пощёчину {target}!",    "👋 {user} бьёт по воздуху!", "👋 {user} получил пощёчину от {target}!", "🛡️ {target} заблокировал удар {user}!"),
     "pat":       ("pat",       "🤗 {user} хочет погладить {target}!",       "🤗 {user} нежно гладит кого-то!", "🤗 {target} довольно мурчит от поглаживаний {user}!", "🚫 {target} не дает {user} себя гладить."),
     "bite":      ("bite",      "😈 {user} хочет укусить {target}!",         "😈 {user} кусает воздух!", "😈 {user} укусил {target}!", "🛡️ {target} не дал {user} себя укусить!"),
     "cuddle":    ("cuddle",    "🥰 {user} хочет прижаться к {target}!",      "🥰 {user} ищет кого обнять!", "🥰 {target} прижался к {user} в ответ!", "💔 {target} отошел от {user}..."),
@@ -104,8 +197,6 @@ BUILTIN_COMMANDS: dict[str, tuple[str, str, str, str, str]] = {
     "nya":       ("nya",       "🐱 {user} мяукает на {target}!",           "🐱 {user} мяукает!", "🐱 {target} мяукнул в ответ!", "😑 {target} не любит кошек."),
     "tableflip": ("tableflip", "😤 {user} переворачивает стол из-за {target}!", "😤 {user} переворачивает стол!", "😤 {target} перевернул еще один стол!", "🛡️ {target} поймал стол!"),
 }
-
-# ─── Русские синонимы для инлайн-поиска ──────────────────────────────────────
 
 RUSSIAN_ALIASES: dict[str, str] = {
     "обнять": "hug", "обнимашки": "hug", "обнял": "hug",
@@ -231,6 +322,10 @@ def get_main_menu_keyboard():
             InlineKeyboardButton("✨ Инлайн-режим", switch_inline_query_current_chat=""),
         ],
         [
+            InlineKeyboardButton("👤 Профиль", callback_data="menu_profile"),
+            InlineKeyboardButton("💍 Свадьбы", callback_data="menu_marry_help"),
+        ],
+        [
             InlineKeyboardButton("📖 Помощь", callback_data="menu_help"),
             InlineKeyboardButton("⚙️ Мои команды", callback_data="menu_mycmds"),
         ]
@@ -257,10 +352,11 @@ def get_rp_list_keyboard(page=0):
     return InlineKeyboardMarkup(keyboard)
 
 def get_rp_action_keyboard(user_id, target_id, cmd_name):
+    # target_id может быть 0, если цель не указана
     keyboard = [
         [
-            InlineKeyboardButton("✅ Принять", callback_data=f"accept_{user_id}_{target_id}_{cmd_name}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_{user_id}_{target_id}_{cmd_name}"),
+            InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user_id}_{target_id}_{cmd_name}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user_id}_{target_id}_{cmd_name}"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -268,6 +364,8 @@ def get_rp_action_keyboard(user_id, target_id, cmd_name):
 # ─── Обработчики команд ───────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    get_profile(user.id, user.username, user.full_name)
     text = (
         "👋 *Привет! Я РП-бот @Kelliy0v0bot!*\n\n"
         "Я помогу тебе выразить эмоции с помощью аниме-гифк.\n"
@@ -275,15 +373,61 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(text, reply_markup=get_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
 
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    p = get_profile(user.id, user.username, user.full_name)
+    partner_text = "Нет"
+    if p["partner_id"] != 0:
+        partner = get_profile(p["partner_id"])
+        partner_text = f"{partner['full_name']} (с {p['marriage_date']})"
+    
     text = (
-        "📖 *Справка по боту*\n\n"
-        "*Как использовать:* `/hug @user` или ответом на сообщение.\n"
-        "*Инлайн:* Набери `@Kelliy0v0bot обнять @user` в любом чате.\n"
-        "*Свои команды:* `/addcmd <имя> <текст>`\n\n"
-        "В инлайн-режиме теперь есть кнопки **Принять** и **Отклонить**!"
+        f"👤 *Профиль: {p['full_name']}*\n\n"
+        f"📊 *Уровень:* {p['level']}\n"
+        f"✨ *Опыт:* {p['xp']}\n"
+        f"🎭 *РП-действий:* {p['rp_count']}\n"
+        f"💍 *В браке с:* {partner_text}"
     )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="menu_main")]]), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_marry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not msg.reply_to_message or msg.reply_to_message.from_user.id == user.id:
+        await msg.reply_text("❌ Ответьте на сообщение того, кому хотите сделать предложение!")
+        return
+    
+    target = msg.reply_to_message.from_user
+    if target.is_bot:
+        await msg.reply_text("❌ Нельзя жениться на ботах!")
+        return
+    
+    p1 = get_profile(user.id, user.username, user.full_name)
+    p2 = get_profile(target.id, target.username, target.full_name)
+    
+    if p1["partner_id"] != 0:
+        await msg.reply_text("❌ Вы уже в браке! Сначала разведитесь.")
+        return
+    if p2["partner_id"] != 0:
+        await msg.reply_text("❌ Этот пользователь уже в браке!")
+        return
+    
+    keyboard = [[
+        InlineKeyboardButton("✅ Согласен", callback_data=f"m_acc_{user.id}_{target.id}"),
+        InlineKeyboardButton("❌ Отказ", callback_data=f"m_dec_{user.id}_{target.id}")
+    ]]
+    await msg.reply_text(
+        f"💍 {get_user_mention(user)} делает предложение {get_user_mention(target)}!\n\nВы согласны?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def cmd_divorce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if divorce(user.id):
+        await update.message.reply_text("💔 Вы развелись... Теперь вы свободны.")
+    else:
+        await update.message.reply_text("❌ Вы не состоите в браке.")
 
 async def cmd_add_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 2:
@@ -301,16 +445,6 @@ async def cmd_add_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     save_custom_commands(custom)
     await update.message.reply_text(f"✅ Команда `/{cmd_name}` добавлена!")
 
-async def cmd_del_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args: return
-    cmd_name = context.args[0].lower().strip("/")
-    custom = load_custom_commands()
-    user_id = str(update.effective_user.id)
-    if user_id in custom and cmd_name in custom[user_id]:
-        del custom[user_id][cmd_name]
-        save_custom_commands(custom)
-        await update.message.reply_text(f"✅ Удалено.")
-
 # ─── Обработчик Callback (кнопок) ─────────────────────────────────────────────
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -318,32 +452,74 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data = query.data
     user = query.from_user
     
-    if data.startswith(("accept_", "decline_")):
+    # Инлайн РП кнопки (acc_ / dec_)
+    if data.startswith(("acc_", "dec_")):
         parts = data.split("_")
         action = parts[0]
         initiator_id = int(parts[1])
         target_id = int(parts[2])
         cmd_name = parts[3]
+        
+        # Если target_id == 0, значит цель не была указана в инлайне, принять может любой
         if target_id != 0 and user.id != target_id:
             await query.answer("❌ Это действие направлено не вам!", show_alert=True)
             return
+        
         await query.answer()
-        current_text = query.message.caption if query.message.caption else query.message.text
-        mentions = re.findall(r"(@\w+|\[.*?\]\(tg://user\?id=\d+\))", current_text)
-        initiator_mention = mentions[0] if len(mentions) > 0 else f"ID:{initiator_id}"
-        target_mention = mentions[1] if len(mentions) > 1 else get_user_mention(user)
+        initiator = get_profile(initiator_id)
+        initiator_mention = get_user_mention(query.from_user if initiator_id == user.id else (await context.bot.get_chat(initiator_id)))
+        target_mention = get_user_mention(user)
+        
         _, _, _, accepted_tpl, declined_tpl = BUILTIN_COMMANDS[cmd_name]
-        new_text = accepted_tpl.format(user=initiator_mention, target=target_mention) if action == "accept" else declined_tpl.format(user=initiator_mention, target=target_mention)
+        new_text = accepted_tpl.format(user=initiator_mention, target=target_mention) if action == "acc" else declined_tpl.format(user=initiator_mention, target=target_mention)
+        
+        if action == "acc":
+            add_xp(initiator_id, 15)
+            add_xp(user.id, 5)
+            
         if query.message.caption:
             await query.edit_message_caption(caption=new_text, parse_mode=ParseMode.MARKDOWN)
         else:
             await query.edit_message_text(text=new_text, parse_mode=ParseMode.MARKDOWN)
         return
 
+    # Свадебные кнопки (m_acc_ / m_dec_)
+    if data.startswith(("m_acc_", "m_dec_")):
+        parts = data.split("_")
+        action = parts[1]
+        proposer_id = int(parts[2])
+        target_id = int(parts[3])
+        
+        if user.id != target_id:
+            await query.answer("❌ Это предложение не вам!", show_alert=True)
+            return
+        
+        await query.answer()
+        proposer = await context.bot.get_chat(proposer_id)
+        if action == "acc":
+            set_marriage(proposer_id, target_id)
+            await query.edit_message_text(f"🎉 Поздравляем! {get_user_mention(proposer)} и {get_user_mention(user)} теперь в браке! 💍", parse_mode=ParseMode.MARKDOWN)
+        else:
+            await query.edit_message_text(f"💔 {get_user_mention(user)} отклонил предложение {get_user_mention(proposer)}...", parse_mode=ParseMode.MARKDOWN)
+        return
+
     await query.answer()
-    user_mention = get_user_mention(user)
     if data == "menu_main":
         await query.edit_message_text("👋 *Главное меню РП-бота*\n\nВыбери действие:", reply_markup=get_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_profile":
+        p = get_profile(user.id, user.username, user.full_name)
+        partner_text = "Нет"
+        if p["partner_id"] != 0:
+            partner = get_profile(p["partner_id"])
+            partner_text = f"{partner['full_name']}"
+        text = (
+            f"👤 *Профиль: {p['full_name']}*\n\n"
+            f"📊 *Уровень:* {p['level']}\n"
+            f"✨ *Опыт:* {p['xp']}\n"
+            f"🎭 *РП-действий:* {p['rp_count']}\n"
+            f"💍 *В браке с:* {partner_text}"
+        )
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="menu_main")]]), parse_mode=ParseMode.MARKDOWN)
     elif data == "menu_rp_list":
         await query.edit_message_text("🎭 *Список РП-команд:*\nНажми на кнопку, чтобы выполнить действие!", reply_markup=get_rp_list_keyboard(0), parse_mode=ParseMode.MARKDOWN)
     elif data.startswith("page_"):
@@ -352,19 +528,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("rp_"):
         cmd_name = data.split("_")[1]
         endpoint, _, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
-        caption = text_without.format(user=user_mention)
+        caption = text_without.format(user=get_user_mention(user))
         gif_url = await fetch_gif(endpoint)
+        add_xp(user.id, 10)
         if gif_url:
             await query.message.reply_animation(animation=gif_url, caption=caption, parse_mode=ParseMode.MARKDOWN)
         else:
             await query.message.reply_text(caption, parse_mode=ParseMode.MARKDOWN)
-    elif data == "menu_help":
-        await cmd_help(update, context)
-    elif data == "menu_mycmds":
-        custom = load_custom_commands()
-        user_cmds = custom.get(str(user.id), {})
-        text = "🗂 *Ваши команды:*\n" + "\n".join([f"• `/{n}`" for n in user_cmds.keys()]) if user_cmds else "📭 У вас пока нет своих команд."
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="menu_main")]]), parse_mode=ParseMode.MARKDOWN)
+    elif data == "menu_marry_help":
+        await query.edit_message_text("💍 *Свадьбы*\n\nЧтобы сделать предложение, ответьте на сообщение пользователя командой `/marry`.\nЧтобы развестись, напишите `/divorce`.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 В меню", callback_data="menu_main")]]), parse_mode=ParseMode.MARKDOWN)
 
 # ─── Обработчики РП ──────────────────────────────────────────────────────────
 
@@ -372,22 +544,32 @@ async def handle_rp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     msg = update.message
     if not msg or not msg.text: return
     cmd_name = msg.text.split()[0].lstrip("/").split("@")[0].lower()
-    user_mention = get_user_mention(msg.from_user)
+    user = msg.from_user
+    user_mention = get_user_mention(user)
     target_mention = get_target_mention(update)
+    
+    get_profile(user.id, user.username, user.full_name)
+    
     if cmd_name in BUILTIN_COMMANDS:
         endpoint, text_with, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
         caption = text_with.format(user=user_mention, target=target_mention) if target_mention else text_without.format(user=user_mention)
         gif_url = await fetch_gif(endpoint)
+        leveled_up, new_level = add_xp(user.id, 10)
+        if leveled_up:
+            await msg.reply_text(f"🆙 {user_mention}, твой уровень повышен до **{new_level}**!", parse_mode=ParseMode.MARKDOWN)
+        
         if gif_url:
             await msg.reply_animation(animation=gif_url, caption=caption, parse_mode=ParseMode.MARKDOWN)
         else:
             await msg.reply_text(caption, parse_mode=ParseMode.MARKDOWN)
         return
+    
     custom = load_custom_commands()
-    user_cmds = custom.get(str(msg.from_user.id), {})
+    user_cmds = custom.get(str(user.id), {})
     if cmd_name in user_cmds:
         template = user_cmds[cmd_name]
         caption = template.format(user=user_mention, target=target_mention or "всех")
+        add_xp(user.id, 5)
         await msg.reply_text(caption, parse_mode=ParseMode.MARKDOWN)
 
 # ─── Инлайн-режим ────────────────────────────────────────────────────────────
@@ -403,43 +585,56 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     cmd_query = parts[0] if parts else ""
     target_input = parts[1] if len(parts) > 1 else None
     
-    # Маппинг русского ввода на английские команды
     mapped_cmd = RUSSIAN_ALIASES.get(cmd_query, cmd_query)
-    
-    # Поиск подходящих команд
     commands_to_show = [c for c in BUILTIN_COMMANDS if c.startswith(mapped_cmd)][:20] if mapped_cmd else list(BUILTIN_COMMANDS.keys())[:20]
     
     for cmd_name in commands_to_show:
         endpoint, text_with, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
-        reply_markup = None
         target_id = 0
         if target_input:
             caption = text_with.format(user=user_mention, target=target_input)
+            # Пытаемся вытащить ID из упоминания типа [name](tg://user?id=123)
             match = re.search(r"tg://user\?id=(\d+)", target_input)
-            target_id = int(match.group(1)) if match else 0
-            reply_markup = get_rp_action_keyboard(user.id, target_id, cmd_name)
+            if match: target_id = int(match.group(1))
         else:
             caption = text_without.format(user=user_mention)
+        
         gif_url = await fetch_gif(endpoint)
         if gif_url:
-            results.append(InlineQueryResultGif(id=str(uuid.uuid4()), gif_url=gif_url, thumbnail_url=gif_url, title=f"/{cmd_name}", caption=caption, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN))
-    await query.answer(results, cache_time=10)
+            # Кнопки Принять/Отклонить теперь всегда добавляются в инлайне
+            reply_markup = get_rp_action_keyboard(user.id, target_id, cmd_name)
+            results.append(InlineQueryResultGif(
+                id=str(uuid.uuid4()),
+                gif_url=gif_url,
+                thumbnail_url=gif_url,
+                title=f"/{cmd_name}",
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            ))
+    await query.answer(results, cache_time=5)
 
 # ─── Запуск ──────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    init_db()
     app = Application.builder().token(BOT_TOKEN).build()
+    
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("rp", lambda u, c: u.message.reply_text("🎭 Список команд:", reply_markup=get_rp_list_keyboard(0))))
+    app.add_handler(CommandHandler("profile", cmd_profile))
+    app.add_handler(CommandHandler("marry", cmd_marry))
+    app.add_handler(CommandHandler("divorce", cmd_divorce))
     app.add_handler(CommandHandler("addcmd", cmd_add_custom))
-    app.add_handler(CommandHandler("delcmd", cmd_del_custom))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # Регистрация всех РП команд
     for cmd in BUILTIN_COMMANDS:
         app.add_handler(CommandHandler(cmd, handle_rp_command))
+    
     app.add_handler(MessageHandler(filters.COMMAND, handle_rp_command))
     app.add_handler(InlineQueryHandler(inline_query))
-    logger.info("Бот с поддержкой русских команд запущен!")
+    
+    logger.info("Бот v3.0 запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
