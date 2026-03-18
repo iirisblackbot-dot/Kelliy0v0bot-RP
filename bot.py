@@ -1,7 +1,7 @@
 """
 Telegram РП-бот с аниме-гифками (nekos.best API)
 Автор: Manus AI
-Версия: 3.2 (Новые команды + Авто-определение ника в инлайне)
+Версия: 3.3 (Имена вместо юзернеймов + Исправленные кнопки)
 """
 
 import logging
@@ -63,12 +63,11 @@ def init_db():
             marriage_date TEXT
         )
     ''')
-    # Таблица для кэширования последних целей (для авто-определения ника в инлайне)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS last_targets (
             user_id INTEGER,
             target_id INTEGER,
-            target_mention TEXT,
+            target_name TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id)
         )
@@ -96,17 +95,17 @@ def get_profile(user_id, username=None, full_name=None):
         "partner_id": row[6], "marriage_date": row[7]
     }
 
-def update_last_target(user_id, target_id, target_mention):
+def update_last_target(user_id, target_id, target_name):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("REPLACE INTO last_targets (user_id, target_id, target_mention, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)", (user_id, target_id, target_mention))
+    cursor.execute("REPLACE INTO last_targets (user_id, target_id, target_name, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)", (user_id, target_id, target_name))
     conn.commit()
     conn.close()
 
 def get_last_target(user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT target_id, target_mention FROM last_targets WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT target_id, target_name FROM last_targets WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return row if row else (0, None)
@@ -297,33 +296,35 @@ async def fetch_gif(endpoint: str) -> str | None:
         logger.warning(f"Ошибка при получении гифки ({endpoint}): {e}")
     return None
 
-def get_user_mention(user) -> str:
-    if user.username:
-        return f"@{user.username}"
+def get_user_name(user) -> str:
+    """Возвращает Имя (Full Name) пользователя в виде ссылки."""
     full_name = user.full_name or user.first_name or "Аноним"
+    # Экранируем спецсимволы Markdown
+    full_name = full_name.replace("[", "\[").replace("]", "\]").replace("*", "\*").replace("_", "\_")
     return f"[{full_name}](tg://user?id={user.id})"
 
-def get_target_mention(update: Update) -> str | None:
+def get_target_info(update: Update) -> tuple[str | None, int]:
+    """Возвращает (Имя_цели, ID_цели)."""
     msg = update.message
-    if not msg: return None
+    if not msg: return None, 0
+    
     if msg.reply_to_message and msg.reply_to_message.from_user:
         target = msg.reply_to_message.from_user
-        mention = get_user_mention(target)
-        # Сохраняем последнюю цель для инлайна
-        update_last_target(msg.from_user.id, target.id, mention)
-        return mention
+        name = get_user_name(target)
+        update_last_target(msg.from_user.id, target.id, name)
+        return name, target.id
+        
     if msg.entities:
         for entity in msg.entities:
-            if entity.type == "mention":
+            if entity.type == "text_mention" and entity.user:
+                name = get_user_name(entity.user)
+                update_last_target(msg.from_user.id, entity.user.id, name)
+                return name, entity.user.id
+            elif entity.type == "mention":
                 mention = msg.text[entity.offset:entity.offset + entity.length]
-                # Пытаемся найти ID по нику (сложно без кэша всех юзеров, но пока так)
                 update_last_target(msg.from_user.id, 0, mention)
-                return mention
-            elif entity.type == "text_mention" and entity.user:
-                mention = get_user_mention(entity.user)
-                update_last_target(msg.from_user.id, entity.user.id, mention)
-                return mention
-    return None
+                return mention, 0
+    return None, 0
 
 # ─── Меню и Кнопки ───────────────────────────────────────────────────────────
 
@@ -374,10 +375,12 @@ def get_rp_list_keyboard(page=0):
     return InlineKeyboardMarkup(keyboard)
 
 def get_rp_action_keyboard(user_id, target_id, cmd_name):
+    # Используем уникальный ID для каждой сессии кнопки, чтобы избежать конфликтов
+    session_id = str(uuid.uuid4())[:8]
     keyboard = [
         [
-            InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user_id}_{target_id}_{cmd_name}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user_id}_{target_id}_{cmd_name}"),
+            InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user_id}_{target_id}_{cmd_name}_{session_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user_id}_{target_id}_{cmd_name}_{session_id}"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -388,7 +391,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     get_profile(user.id, user.username, user.full_name)
     text = (
-        "👋 *Привет! Я РП-бот @Kelliy0v0bot!*\n\n"
+        f"👋 *Привет, {user.first_name}! Я РП-бот @Kelliy0v0bot!*\n\n"
         "Я помогу тебе выразить эмоции с помощью аниме-гифк.\n"
         "Используй кнопки ниже или пиши команды в чат!"
     )
@@ -438,7 +441,7 @@ async def cmd_marry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         InlineKeyboardButton("❌ Отказ", callback_data=f"m_dec_{user.id}_{target.id}")
     ]]
     await msg.reply_text(
-        f"💍 {get_user_mention(user)} делает предложение {get_user_mention(target)}!\n\nВы согласны?",
+        f"💍 {get_user_name(user)} делает предложение {get_user_name(target)}!\n\nВы согласны?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -480,20 +483,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         target_id = int(parts[2])
         cmd_name = parts[3]
         
+        # Если target_id == 0, значит цель не была указана, принять может любой
         if target_id != 0 and user.id != target_id:
             await query.answer("❌ Это действие направлено не вам!", show_alert=True)
             return
         
         await query.answer()
         
-        current_text = query.message.caption if query.message.caption else query.message.text
-        mentions = re.findall(r"(@\w+|\[.*?\]\(tg://user\?id=\d+\))", current_text)
-        
-        initiator_mention = mentions[0] if len(mentions) > 0 else f"ID:{initiator_id}"
-        target_mention = get_user_mention(user)
+        # Получаем инициатора
+        try:
+            initiator = await context.bot.get_chat(initiator_id)
+            initiator_name = get_user_name(initiator)
+        except:
+            initiator_name = "Пользователь"
+            
+        target_name = get_user_name(user)
         
         _, _, _, accepted_tpl, declined_tpl = BUILTIN_COMMANDS[cmd_name]
-        new_text = accepted_tpl.format(user=initiator_mention, target=target_mention) if action == "acc" else declined_tpl.format(user=initiator_mention, target=target_mention)
+        new_text = accepted_tpl.format(user=initiator_name, target=target_name) if action == "acc" else declined_tpl.format(user=initiator_name, target=target_name)
         
         if action == "acc":
             add_xp(initiator_id, 15)
@@ -516,12 +523,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         
         await query.answer()
-        proposer = await context.bot.get_chat(proposer_id)
+        try:
+            proposer = await context.bot.get_chat(proposer_id)
+            proposer_name = get_user_name(proposer)
+        except:
+            proposer_name = "Пользователь"
+            
         if action == "acc":
             set_marriage(proposer_id, target_id)
-            await query.edit_message_text(f"🎉 Поздравляем! {get_user_mention(proposer)} и {get_user_mention(user)} теперь в браке! 💍", parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(f"🎉 Поздравляем! {proposer_name} и {get_user_name(user)} теперь в браке! 💍", parse_mode=ParseMode.MARKDOWN)
         else:
-            await query.edit_message_text(f"💔 {get_user_mention(user)} отклонил предложение {get_user_mention(proposer)}...", parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(f"💔 {get_user_name(user)} отклонил предложение {proposer_name}...", parse_mode=ParseMode.MARKDOWN)
         return
 
     await query.answer()
@@ -549,7 +561,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data.startswith("rp_"):
         cmd_name = data.split("_")[1]
         endpoint, _, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
-        caption = text_without.format(user=get_user_mention(user))
+        caption = text_without.format(user=get_user_name(user))
         gif_url = await fetch_gif(endpoint)
         add_xp(user.id, 10)
         if gif_url:
@@ -566,18 +578,18 @@ async def handle_rp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not msg or not msg.text: return
     cmd_name = msg.text.split()[0].lstrip("/").split("@")[0].lower()
     user = msg.from_user
-    user_mention = get_user_mention(user)
-    target_mention = get_target_mention(update)
+    user_name = get_user_name(user)
+    target_name, target_id = get_target_info(update)
     
     get_profile(user.id, user.username, user.full_name)
     
     if cmd_name in BUILTIN_COMMANDS:
         endpoint, text_with, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
-        caption = text_with.format(user=user_mention, target=target_mention) if target_mention else text_without.format(user=user_mention)
+        caption = text_with.format(user=user_name, target=target_name) if target_name else text_without.format(user=user_name)
         gif_url = await fetch_gif(endpoint)
         leveled_up, new_level = add_xp(user.id, 10)
         if leveled_up:
-            await msg.reply_text(f"🆙 {user_mention}, твой уровень повышен до **{new_level}**!", parse_mode=ParseMode.MARKDOWN)
+            await msg.reply_text(f"🆙 {user_name}, твой уровень повышен до **{new_level}**!", parse_mode=ParseMode.MARKDOWN)
         
         if gif_url:
             await msg.reply_animation(animation=gif_url, caption=caption, parse_mode=ParseMode.MARKDOWN)
@@ -589,7 +601,7 @@ async def handle_rp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_cmds = custom.get(str(user.id), {})
     if cmd_name in user_cmds:
         template = user_cmds[cmd_name]
-        caption = template.format(user=user_mention, target=target_mention or "всех")
+        caption = template.format(user=user_name, target=target_name or "всех")
         add_xp(user.id, 5)
         await msg.reply_text(caption, parse_mode=ParseMode.MARKDOWN)
 
@@ -599,7 +611,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.inline_query
     query_text = query.query.strip().lower()
     user = query.from_user
-    user_mention = get_user_mention(user)
+    user_name = get_user_name(user)
     results = []
     
     parts = query_text.split(None, 1)
@@ -608,8 +620,8 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     mapped_cmd = RUSSIAN_ALIASES.get(cmd_query, cmd_query)
     
-    # Авто-определение ника: если цель не введена, берем последнюю из БД
-    last_target_id, last_target_mention = get_last_target(user.id)
+    # Авто-определение ника
+    last_target_id, last_target_name = get_last_target(user.id)
     
     commands_to_show = [c for c in BUILTIN_COMMANDS if c.startswith(mapped_cmd)][:10] if mapped_cmd else list(BUILTIN_COMMANDS.keys())[:10]
     
@@ -618,37 +630,37 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         gif_url = await fetch_gif(endpoint)
         if not gif_url: continue
         
-        # 1. Вариант БЕЗ цели (для всех)
+        # 1. Вариант БЕЗ цели
         results.append(InlineQueryResultGif(
             id=f"{cmd_name}_all_{uuid.uuid4()}",
             gif_url=gif_url,
             thumbnail_url=gif_url,
             title=f"/{cmd_name} (для всех)",
-            caption=text_without.format(user=user_mention),
+            caption=text_without.format(user=user_name),
             reply_markup=get_rp_action_keyboard(user.id, 0, cmd_name),
             parse_mode=ParseMode.MARKDOWN
         ))
         
-        # 2. Вариант с АВТО-подстановкой (если есть последняя цель)
-        if last_target_mention and not target_input:
+        # 2. Вариант с АВТО-подстановкой
+        if last_target_name and not target_input:
             results.append(InlineQueryResultGif(
                 id=f"{cmd_name}_auto_{uuid.uuid4()}",
                 gif_url=gif_url,
                 thumbnail_url=gif_url,
-                title=f"/{cmd_name} для {last_target_mention} (авто)",
-                caption=text_with.format(user=user_mention, target=last_target_mention),
+                title=f"/{cmd_name} для {last_target_name} (авто)",
+                caption=text_with.format(user=user_name, target=last_target_name),
                 reply_markup=get_rp_action_keyboard(user.id, last_target_id, cmd_name),
                 parse_mode=ParseMode.MARKDOWN
             ))
         
-        # 3. Вариант с РУЧНЫМ вводом цели
+        # 3. Вариант с РУЧНЫМ вводом
         if target_input:
             results.append(InlineQueryResultGif(
                 id=f"{cmd_name}_manual_{uuid.uuid4()}",
                 gif_url=gif_url,
                 thumbnail_url=gif_url,
                 title=f"/{cmd_name} для {target_input}",
-                caption=text_with.format(user=user_mention, target=target_input),
+                caption=text_with.format(user=user_name, target=target_input),
                 reply_markup=get_rp_action_keyboard(user.id, 0, cmd_name),
                 parse_mode=ParseMode.MARKDOWN
             ))
@@ -674,7 +686,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.COMMAND, handle_rp_command))
     app.add_handler(InlineQueryHandler(inline_query))
     
-    logger.info("Бот v3.2 запущен!")
+    logger.info("Бот v3.3 запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
