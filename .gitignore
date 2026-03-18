@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.log
+custom_commands.json
+.env
+venv/
+.vscode/
+.idea/
