@@ -105,6 +105,69 @@ BUILTIN_COMMANDS: dict[str, tuple[str, str, str, str, str]] = {
     "tableflip": ("tableflip", "😤 {user} переворачивает стол из-за {target}!", "😤 {user} переворачивает стол!", "😤 {target} перевернул еще один стол!", "🛡️ {target} поймал стол!"),
 }
 
+# ─── Русские синонимы для инлайн-поиска ──────────────────────────────────────
+
+RUSSIAN_ALIASES: dict[str, str] = {
+    "обнять": "hug", "обнимашки": "hug", "обнял": "hug",
+    "поцеловать": "kiss", "чмок": "kiss", "поцелуй": "kiss",
+    "ударить": "slap", "пощечина": "slap", "врезать": "slap",
+    "погладить": "pat", "гладить": "pat",
+    "укусить": "bite", "кусь": "bite",
+    "прижаться": "cuddle", "обнимать": "cuddle",
+    "тыкнуть": "poke", "тык": "poke",
+    "щекотать": "tickle", "щекотка": "tickle",
+    "бонк": "bonk", "ударить_битой": "bonk",
+    "бака": "baka", "дурак": "baka",
+    "воздушный_поцелуй": "blowkiss",
+    "взять_за_руку": "handhold", "рука": "handhold",
+    "дать_пять": "highfive", "пять": "highfive",
+    "покормить": "feed", "еда": "feed",
+    "пнуть": "kick", "пинок": "kick",
+    "ударить_кулаком": "punch", "удар": "punch",
+    "выкинуть": "yeet", "полет": "yeet",
+    "на_ручки": "carry", "нести": "carry",
+    "кабедон": "kabedon", "прижать_к_стене": "kabedon",
+    "трясти": "shake",
+    "помахать": "wave", "привет": "wave",
+    "чмокнуть": "peck",
+    "смотреть": "stare", "взгляд": "stare",
+    "подмигнуть": "wink",
+    "покраснеть": "blush", "смущение": "blush",
+    "улыбнуться": "smile", "улыбка": "smile",
+    "плакать": "cry", "слезы": "cry",
+    "танцевать": "dance", "танец": "dance",
+    "хлопать": "clap", "аплодисменты": "clap",
+    "ням": "nom", "кушать": "nom",
+    "фейспалм": "facepalm", "рукалицо": "facepalm",
+    "рукопожатие": "handshake",
+    "на_колени": "lappillow",
+    "дуться": "pout", "обидеться": "pout",
+    "кивнуть": "nod",
+    "честь": "salute", "салют": "salute",
+    "лайк": "thumbsup", "класс": "thumbsup",
+    "смеяться": "laugh", "смех": "laugh",
+    "кружиться": "spin",
+    "бежать": "run", "убежать": "run",
+    "спать": "sleep", "сон": "sleep",
+    "зевать": "yawn",
+    "ухмылка": "smug",
+    "думать": "think",
+    "радость": "happy", "счастье": "happy",
+    "злиться": "angry", "злость": "angry",
+    "стрелять": "shoot", "выстрел": "shoot",
+    "следить": "lurk",
+    "не_понимать": "confused",
+    "хз": "shrug", "пожать_плечами": "shrug",
+    "хвост": "wag",
+    "чай": "sip", "пить": "sip",
+    "хихикать": "teehee",
+    "шок": "shocked",
+    "язык": "bleh",
+    "скука": "bored",
+    "мяу": "nya",
+    "стол": "tableflip",
+}
+
 # ─── Утилиты ─────────────────────────────────────────────────────────────────
 
 def load_custom_commands() -> dict:
@@ -207,7 +270,7 @@ def get_rp_action_keyboard(user_id, target_id, cmd_name):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "👋 *Привет! Я РП-бот @Kelliy0v0bot!*\n\n"
-        "Я помогу тебе выразить эмоции с помощью аниме-гифок.\n"
+        "Я помогу тебе выразить эмоции с помощью аниме-гифк.\n"
         "Используй кнопки ниже или пиши команды в чат!"
     )
     await update.message.reply_text(text, reply_markup=get_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
@@ -216,7 +279,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "📖 *Справка по боту*\n\n"
         "*Как использовать:* `/hug @user` или ответом на сообщение.\n"
-        "*Инлайн:* Набери `@Kelliy0v0bot hug @user` в любом чате.\n"
+        "*Инлайн:* Набери `@Kelliy0v0bot обнять @user` в любом чате.\n"
         "*Свои команды:* `/addcmd <имя> <текст>`\n\n"
         "В инлайн-режиме теперь есть кнопки **Принять** и **Отклонить**!"
     )
@@ -335,10 +398,17 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = query.from_user
     user_mention = get_user_mention(user)
     results = []
+    
     parts = query_text.split(None, 1)
     cmd_query = parts[0] if parts else ""
     target_input = parts[1] if len(parts) > 1 else None
-    commands_to_show = [c for c in BUILTIN_COMMANDS if c.startswith(cmd_query)][:20] if cmd_query else list(BUILTIN_COMMANDS.keys())[:20]
+    
+    # Маппинг русского ввода на английские команды
+    mapped_cmd = RUSSIAN_ALIASES.get(cmd_query, cmd_query)
+    
+    # Поиск подходящих команд
+    commands_to_show = [c for c in BUILTIN_COMMANDS if c.startswith(mapped_cmd)][:20] if mapped_cmd else list(BUILTIN_COMMANDS.keys())[:20]
+    
     for cmd_name in commands_to_show:
         endpoint, text_with, text_without, _, _ = BUILTIN_COMMANDS[cmd_name]
         reply_markup = None
@@ -369,7 +439,7 @@ def main() -> None:
         app.add_handler(CommandHandler(cmd, handle_rp_command))
     app.add_handler(MessageHandler(filters.COMMAND, handle_rp_command))
     app.add_handler(InlineQueryHandler(inline_query))
-    logger.info("Бот с кнопками Принять/Отклонить запущен!")
+    logger.info("Бот с поддержкой русских команд запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
